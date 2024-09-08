@@ -1,14 +1,14 @@
 import os
 import sys
 from PySide2 import QtGui, QtCore, QtWidgets
+import Metashape
 
 """
 Script for cleaning up Metashape projects by removing chosen assets.
-Matjaž Mori, July 2024
+Matjaž Mori, September 2024
 https://github.com/matjash
 
 """
-
 
 class CleanUpDlg(QtWidgets.QDialog):
     def __init__(self, parent=None):
@@ -24,7 +24,6 @@ class CleanUpDlg(QtWidgets.QDialog):
             "selected projects, or all projects in subfolders."
         )
         self.layout.addWidget(self.help_label)
-
 
         # Checkboxes
         self.checkboxes = {
@@ -71,58 +70,66 @@ class CleanUpDlg(QtWidgets.QDialog):
         return [asset for asset, checkbox in self.checkboxes.items() if checkbox.isChecked()]
 
     def confirm_removal(self, assets, projects):
-        # Join assets with commas for a single line
         assets_message = ', '.join(assets)
-        
-        # Join projects with new lines to ensure each project is on a separate line
         projects_message = '\n'.join(projects)
         
         message = f"Are you sure you want to remove the following assets:\n\n" \
-                f"{assets_message}\n\n" \
-                f"From the following projects:\n\n" \
-                f"{projects_message}"
-        reply = QtWidgets.QMessageBox.question(self, 'Confirm Removal of celected assets', message,
+                  f"{assets_message}\n\n" \
+                  f"From the following projects:\n\n" \
+                  f"{projects_message}"
+        reply = QtWidgets.QMessageBox.question(self, 'Confirm Removal of selected assets', message,
                                                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
                                                QtWidgets.QMessageBox.No)
         return reply == QtWidgets.QMessageBox.Yes
 
     def handle_assets(self, chunk, asset_type):
-        if asset_type == "Key Points":
-            if chunk.tie_points:
-                chunk.tie_points.removeKeypoints()
-        elif asset_type == "Tie Points":
-            chunk.tie_points = None
-        elif asset_type == "Depth Maps":
-            chunk.remove(chunk.depth_maps_sets)
-        elif asset_type == "Point Clouds":
-            chunk.remove(chunk.point_clouds)
-        elif asset_type == "Models":
-            chunk.remove(chunk.models)
-        elif asset_type == "Tiled Models":
-            chunk.remove(chunk.tiled_models)
-        elif asset_type == "DEMs":
-            chunk.remove(chunk.elevations)
-        elif asset_type == "Orthophotos":
-            for ortho in chunk.orthomosaics:
-                ortho.removeOrthophotos()
-        elif asset_type == "Orthomosaics":
-            chunk.remove(chunk.orthomosaics)
-        elif asset_type == "Shapes":
-            chunk.shapes = None
-        else:
-            print("Unknown asset type: " + asset_type)
-            return
-        print(asset_type + " removed from " + chunk.label)
+        try:
+            if asset_type == "Key Points":
+                if chunk.tie_points:
+                    chunk.tie_points.removeKeypoints()
+            elif asset_type == "Tie Points":
+                chunk.tie_points = None
+            elif asset_type == "Depth Maps":
+                chunk.remove(chunk.depth_maps_sets)
+            elif asset_type == "Point Clouds":
+                chunk.remove(chunk.point_clouds)
+            elif asset_type == "Models":
+                chunk.remove(chunk.models)
+            elif asset_type == "Tiled Models":
+                chunk.remove(chunk.tiled_models)
+            elif asset_type == "DEMs":
+                chunk.remove(chunk.elevations)
+            elif asset_type == "Orthophotos":
+                for ortho in chunk.orthomosaics:
+                    ortho.removeOrthophotos()
+            elif asset_type == "Orthomosaics":
+                chunk.remove(chunk.orthomosaics)
+            elif asset_type == "Shapes":
+                chunk.shapes = None
+            else:
+                print("Unknown asset type: " + asset_type)
+                return False
+            print(asset_type + " removed from " + chunk.label)
+            return True
+        except Exception as e:
+            print(f"Failed to remove {asset_type} from {chunk.label}: {e}")
+            return False
 
     def remove_from_project(self):
-        # Assuming `Metashape` is available and `chunk` is obtained correctly
-        chunk = Metashape.app.document.chunk  # Update this as per actual method to get the chunk
+        chunk = Metashape.app.document.chunk
         selected_assets = self.get_selected_assets()
         assets = [asset for asset in selected_assets]
-        projects = [chunk.label]  # Only one project in this case
+        projects = [chunk.label]
+        log = []
+
         if self.confirm_removal(assets, projects):
             for asset in selected_assets:
-                self.handle_assets(chunk, asset)
+                success = self.handle_assets(chunk, asset)
+                if success:
+                    log.append((f"Successfully removed {asset} from {chunk.label}", "black"))
+                else:
+                    log.append((f"Failed to remove {asset} from {chunk.label}", "red"))
+            self.show_log(log)
 
     def select_project(self):
         file_dialog = QtWidgets.QFileDialog(self, "Select Metashape Project")
@@ -134,16 +141,25 @@ class CleanUpDlg(QtWidgets.QDialog):
         if file_dialog.exec_():
             file_paths = file_dialog.selectedFiles()
             selected_assets = self.get_selected_assets()
+            log = []
+
             if selected_assets:
                 if self.confirm_removal(selected_assets, file_paths):
                     for file_path in file_paths:
-                        doc = Metashape.Document()  # Assuming Metashape's Document class
-                        doc.open(file_path)
-                        chunk = doc.chunk
-                        for asset in selected_assets:
-                            self.handle_assets(chunk, asset)
-                        doc.save()
-                       
+                        try:
+                            doc = Metashape.Document()
+                            doc.open(file_path)
+                            chunk = doc.chunk
+                            for asset in selected_assets:
+                                success = self.handle_assets(chunk, asset)
+                                if success:
+                                    log.append((f"Successfully removed {asset} from {file_path}", "black"))
+                                else:
+                                    log.append((f"Failed to remove {asset} from {file_path}", "red"))
+                            doc.save()
+                        except Exception as e:
+                            log.append((f"Failed to open or process {file_path}: {e}", "red"))
+                    self.show_log(log)
 
     def remove_from_subfolders(self):
         folder_dialog = QtWidgets.QFileDialog(self, "Select Folder")
@@ -153,22 +169,97 @@ class CleanUpDlg(QtWidgets.QDialog):
         
         if folder_dialog.exec_():
             folder_path = folder_dialog.selectedFiles()[0]
-            selected_assets = self.get_selected_assets()
             file_paths = []
             for root, dirs, files in os.walk(folder_path):
                 for file in files:
                     if file.lower().endswith(('.psz', '.psx')):
                         file_paths.append(os.path.join(root, file))
-            if selected_assets and file_paths:
-                if self.confirm_removal(selected_assets, file_paths):
-                    for file_path in file_paths:
-                        doc = Metashape.Document()
-                        doc.open(file_path)
-                        chunk = doc.chunk
-                        for asset in selected_assets:
-                            self.handle_assets(chunk, asset)
-                        doc.save()
-                     
+            
+            if file_paths:
+                # Show project selection table
+                self.project_selection_table(file_paths)
+    
+    def project_selection_table(self, file_paths):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Select Projects to Clean")
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        # "Select All" and "Deselect All" buttons
+        select_all_button = QtWidgets.QPushButton("Select All", dialog)
+        select_all_button.clicked.connect(lambda: self.toggle_select_all(checkboxes, True))
+        layout.addWidget(select_all_button)
+
+        deselect_all_button = QtWidgets.QPushButton("Deselect All", dialog)
+        deselect_all_button.clicked.connect(lambda: self.toggle_select_all(checkboxes, False))
+        layout.addWidget(deselect_all_button)
+
+        table = QtWidgets.QTableWidget(len(file_paths), 2, dialog)
+        table.setHorizontalHeaderLabels(["Project Path", "Select"])
+        table.setColumnWidth(0, 400)
+        table.setColumnWidth(1, 60)
+        
+        checkboxes = []
+        for i, path in enumerate(file_paths):
+            table.setItem(i, 0, QtWidgets.QTableWidgetItem(path))
+            checkbox = QtWidgets.QCheckBox()
+            checkbox.setChecked(True)  # Default to selecting all
+            table.setCellWidget(i, 1, checkbox)
+            checkboxes.append(checkbox)
+        
+        layout.addWidget(table)
+
+        ok_button = QtWidgets.QPushButton("OK", dialog)
+        ok_button.clicked.connect(lambda: self.process_selected_projects(dialog, file_paths, checkboxes))
+        layout.addWidget(ok_button)
+
+        dialog.exec_()
+
+    def toggle_select_all(self, checkboxes, state):
+        # Toggles all checkboxes based on the "Select All" or "Deselect All" button state
+        for checkbox in checkboxes:
+            checkbox.setChecked(state)
+
+    def process_selected_projects(self, dialog, file_paths, checkboxes):
+        selected_files = [file_paths[i] for i, checkbox in enumerate(checkboxes) if checkbox.isChecked()]
+        dialog.close()
+        if selected_files:
+            selected_assets = self.get_selected_assets()
+            log = []
+
+            if selected_assets:
+                if self.confirm_removal(selected_assets, selected_files):
+                    for file_path in selected_files:
+                        try:
+                            doc = Metashape.Document()
+                            doc.open(file_path)
+                            chunk = doc.chunk
+                            for asset in selected_assets:
+                                success = self.handle_assets(chunk, asset)
+                                if success:
+                                    log.append((f"Successfully removed {asset} from {file_path}", "black"))
+                                else:
+                                    log.append((f"Failed to remove {asset} from {file_path}", "red"))
+                            doc.save()
+                        except Exception as e:
+                            log.append((f"Failed to open or process {file_path}: {e}", "red"))
+                    self.show_log(log)
+
+    def show_log(self, log):
+        log_dialog = QtWidgets.QDialog(self)
+        log_dialog.setWindowTitle("Clean Up Log")
+        log_dialog.resize(500, 400)
+        layout = QtWidgets.QVBoxLayout(log_dialog)
+
+        log_text = QtWidgets.QTextEdit(log_dialog)
+        log_text.setReadOnly(True)
+        log_text.setStyleSheet("QTextEdit {font-family: Consolas; font-size: 10pt;}")
+        log_text.setText("<br>".join(
+            [f'<span style="color:{color};">{message}</span>' for message, color in log]
+        ))
+        log_text.setMinimumHeight(200)
+
+        layout.addWidget(log_text)
+        log_dialog.exec_()
 
 def clean_up_dialog():
     app = QtWidgets.QApplication.instance()
@@ -179,3 +270,4 @@ def clean_up_dialog():
 label = "Scripts/Clean Up Everything"
 Metashape.app.addMenuItem(label, clean_up_dialog)
 print(f"To execute this script press {label}")
+
